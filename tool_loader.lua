@@ -134,6 +134,298 @@ function ToolObj:CheckObjects()
 
 end
 
+function ToolObj:UpdateData()
+
+	self:SetStage( self:NumObjects() )
+
+end
+
+function ToolObj:SetStage( i )
+
+	if ( SERVER ) then
+		self:GetWeapon():SetNWInt( "Stage", i, true )
+	end
+
+end
+
+function ToolObj:GetStage()
+	return self:GetWeapon():GetNWInt( "Stage", 0 )
+end
+
+function ToolObj:SetOperation( i )
+
+	if ( SERVER ) then
+		self:GetWeapon():SetNWInt( "Op", i, true )
+	end
+
+end
+
+function ToolObj:GetOperation()
+	return self:GetWeapon():GetNWInt( "Op", 0 )
+end
+
+
+-- Clear the selected objects
+function ToolObj:ClearObjects()
+
+	self:ReleaseGhostEntity()
+	self.Objects = {}
+	self:SetStage( 0 )
+	self:SetOperation( 0 )
+
+end
+
+--[[---------------------------------------------------------
+	Since we're going to be expanding this a lot I've tried
+	to add accessors for all of this crap to make it harder
+	for us to mess everything up.
+-----------------------------------------------------------]]
+function ToolObj:GetEnt( i )
+
+	if ( !self.Objects[i] ) then return NULL end
+
+	return self.Objects[i].Ent
+end
+
+
+--[[---------------------------------------------------------
+	Returns the world position of the numbered object hit
+	We store it as a local vector then convert it to world
+	That way even if the object moves it's still valid
+-----------------------------------------------------------]]
+function ToolObj:GetPos( i )
+
+	if ( self.Objects[i].Ent:EntIndex() == 0 ) then
+		return self.Objects[i].Pos
+	else
+		if ( IsValid( self.Objects[i].Phys ) ) then
+			return self.Objects[i].Phys:LocalToWorld( self.Objects[i].Pos )
+		else
+			return self.Objects[i].Ent:LocalToWorld( self.Objects[i].Pos )
+		end
+	end
+
+end
+
+-- Returns the local position of the numbered hit
+function ToolObj:GetLocalPos( i )
+	return self.Objects[i].Pos
+end
+
+-- Returns the physics bone number of the hit (ragdolls)
+function ToolObj:GetBone( i )
+	return self.Objects[i].Bone
+end
+
+function ToolObj:GetNormal( i )
+	if ( self.Objects[i].Ent:EntIndex() == 0 ) then
+		return self.Objects[i].Normal
+	else
+		local norm
+		if ( IsValid( self.Objects[i].Phys ) ) then
+			norm = self.Objects[i].Phys:LocalToWorld( self.Objects[i].Normal )
+		else
+			norm = self.Objects[i].Ent:LocalToWorld( self.Objects[i].Normal )
+		end
+
+		return norm - self:GetPos(i)
+	end
+end
+
+-- Returns the physics object for the numbered hit
+function ToolObj:GetPhys( i )
+
+	if ( self.Objects[i].Phys == nil ) then
+		return self:GetEnt(i):GetPhysicsObject()
+	end
+
+	return self.Objects[i].Phys
+end
+
+
+-- Sets a selected object
+function ToolObj:SetObject( i, ent, pos, phys, bone, norm )
+
+	self.Objects[i] = {}
+	self.Objects[i].Ent = ent
+	self.Objects[i].Phys = phys
+	self.Objects[i].Bone = bone
+	self.Objects[i].Normal = norm
+
+	-- Worldspawn is a special case
+	if ( ent:EntIndex() == 0 ) then
+
+		self.Objects[i].Phys = nil
+		self.Objects[i].Pos = pos
+
+	else
+
+		norm = norm + pos
+
+		-- Convert the position to a local position - so it's still valid when the object moves
+		if ( IsValid( phys ) ) then
+			self.Objects[i].Normal = self.Objects[i].Phys:WorldToLocal( norm )
+			self.Objects[i].Pos = self.Objects[i].Phys:WorldToLocal( pos )
+		else
+			self.Objects[i].Normal = self.Objects[i].Ent:WorldToLocal( norm )
+			self.Objects[i].Pos = self.Objects[i].Ent:WorldToLocal( pos )
+		end
+
+	end
+
+	if ( SERVER ) then
+		-- Todo: Make sure the client got the same info
+	end
+
+end
+
+
+-- Returns the number of objects in the list
+function ToolObj:NumObjects()
+
+	if ( CLIENT ) then
+
+		return self:GetStage()
+
+	end
+
+	return #self.Objects
+
+end
+
+
+-- Returns the number of objects in the list
+function ToolObj:GetHelpText()
+
+	return "#tool." .. GetConVarString( "gmod_toolmode" ) .. "." .. self:GetStage()
+
+end
+
+--[[---------------------------------------------------------
+	Starts up the ghost entity
+	The most important part of this is making sure it gets deleted properly
+-----------------------------------------------------------]]
+function ToolObj:MakeGhostEntity( model, pos, angle )
+
+	util.PrecacheModel( model )
+
+	-- We do ghosting serverside in single player
+	-- It's done clientside in multiplayer
+	if ( SERVER && !game.SinglePlayer() ) then return end
+	if ( CLIENT && game.SinglePlayer() ) then return end
+
+	-- The reason we need this is because in multiplayer, when you holster a tool serverside,
+	-- either by using the spawnnmenu's Weapons tab or by simply entering a vehicle,
+	-- the Think hook is called once after Holster is called on the client, recreating the ghost entity right after it was removed.
+	if ( !IsFirstTimePredicted() ) then return end
+
+	-- Release the old ghost entity
+	self:ReleaseGhostEntity()
+
+	-- Don't allow ragdolls/effects to be ghosts
+	if ( !util.IsValidProp( model ) ) then return end
+
+	if ( CLIENT ) then
+		self.GhostEntity = ents.CreateClientProp( model )
+	else
+		self.GhostEntity = ents.Create( "prop_physics" )
+	end
+
+	-- If there's too many entities we might not spawn..
+	if ( !IsValid( self.GhostEntity ) ) then
+		self.GhostEntity = nil
+		return
+	end
+
+	self.GhostEntity:SetModel( model )
+	self.GhostEntity:SetPos( pos )
+	self.GhostEntity:SetAngles( angle )
+	self.GhostEntity:Spawn()
+
+	-- We do not want physics at all
+	self.GhostEntity:PhysicsDestroy()
+
+	-- SOLID_NONE causes issues with Entity.NearestPoint used by Wheel tool
+	--self.GhostEntity:SetSolid( SOLID_NONE )
+	self.GhostEntity:SetMoveType( MOVETYPE_NONE )
+	self.GhostEntity:SetNotSolid( true )
+	self.GhostEntity:SetRenderMode( RENDERMODE_TRANSCOLOR )
+	self.GhostEntity:SetColor( Color( 255, 255, 255, 150 ) )
+
+end
+
+--[[---------------------------------------------------------
+	Starts up the ghost entity
+	The most important part of this is making sure it gets deleted properly
+-----------------------------------------------------------]]
+function ToolObj:StartGhostEntity( ent )
+
+	-- We do ghosting serverside in single player
+	-- It's done clientside in multiplayer
+	if ( SERVER && !game.SinglePlayer() ) then return end
+	if ( CLIENT && game.SinglePlayer() ) then return end
+
+	self:MakeGhostEntity( ent:GetModel(), ent:GetPos(), ent:GetAngles() )
+
+end
+
+--[[---------------------------------------------------------
+	Releases up the ghost entity
+-----------------------------------------------------------]]
+function ToolObj:ReleaseGhostEntity()
+
+	if ( self.GhostEntity ) then
+		if ( !IsValid( self.GhostEntity ) ) then self.GhostEntity = nil return end
+		self.GhostEntity:Remove()
+		self.GhostEntity = nil
+	end
+
+	-- This is unused!
+	if ( self.GhostEntities ) then
+
+		for k,v in pairs( self.GhostEntities ) do
+			if ( IsValid( v ) ) then v:Remove() end
+			self.GhostEntities[ k ] = nil
+		end
+
+		self.GhostEntities = nil
+	end
+
+	-- This is unused!
+	if ( self.GhostOffset ) then
+
+		for k,v in pairs( self.GhostOffset ) do
+			self.GhostOffset[ k ] = nil
+		end
+
+	end
+
+end
+
+--[[---------------------------------------------------------
+	Update the ghost entity
+-----------------------------------------------------------]]
+function ToolObj:UpdateGhostEntity()
+
+	if ( self.GhostEntity == nil ) then return end
+	if ( !IsValid( self.GhostEntity ) ) then self.GhostEntity = nil return end
+
+	local trace = self:GetOwner():GetEyeTrace()
+	if ( !trace.Hit ) then return end
+
+	local Ang1, Ang2 = self:GetNormal( 1 ):Angle(), ( trace.HitNormal * -1 ):Angle()
+	local TargetAngle = self:GetEnt( 1 ):AlignAngles( Ang1, Ang2 )
+
+	self.GhostEntity:SetPos( self:GetEnt( 1 ):GetPos() )
+	self.GhostEntity:SetAngles( TargetAngle )
+
+	local TranslatedPos = self.GhostEntity:LocalToWorld( self:GetLocalPos( 1 ) )
+	local TargetPos = trace.HitPos + ( self:GetEnt( 1 ):GetPos() - TranslatedPos ) + trace.HitNormal
+
+	self.GhostEntity:SetPos( TargetPos )
+
+end
+
 if CLIENT then
 	-- Tool should return true if freezing the view angles
 	function ToolObj:FreezeMovement()
