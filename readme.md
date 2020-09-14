@@ -1,4 +1,4 @@
 # Plugins
 
-Tool Loader\n
+##Tool Loader
 Drop this plugin into your framework/schema. Any stools within any other plugins' stools folder will load.
