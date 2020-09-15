@@ -450,8 +450,6 @@ if CLIENT then
 
 		for ToolName, TOOL in pairs( TOOLS_LIST ) do
 
-			print(ToolName)
-
 			if ( TOOL.AddToMenu != false ) then
 
 				spawnmenu.AddToolMenuOption( TOOL.Tab or "Main",
